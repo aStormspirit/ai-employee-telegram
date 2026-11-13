@@ -1,0 +1,14 @@
+{
+  "name": "ai-employee-telegram",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Нейросотрудник в Telegram: принимает задачи в чате и выполняет их в облачной сессии Claude Code",
+  "scripts": {
+    "start": "node src/index.mjs",
+    "check": "node --check src/index.mjs && node --check src/config.mjs && node --check src/telegram.mjs && node --check src/routine.mjs"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}

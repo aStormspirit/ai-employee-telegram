@@ -1,0 +1,134 @@
+name: Deploy bot
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: bot-deploy
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    env:
+      SSH_PORT: ${{ secrets.SERVER_SSH_PORT }}
+      # Папка на сервере: <SERVER_DEPLOY_PATH>/ai-employee или ~/ai-employee, если секрет не задан.
+      BOT_DIR: ${{ secrets.SERVER_DEPLOY_PATH && format('{0}/ai-employee', secrets.SERVER_DEPLOY_PATH) || 'ai-employee' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Syntax check
+        run: npm run check
+
+      - name: Check secrets
+        id: secrets
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          SERVER_HOST: ${{ secrets.SERVER_HOST }}
+          ROUTINE_FIRE_URL: ${{ secrets.ROUTINE_FIRE_URL }}
+          ROUTINE_TOKEN: ${{ secrets.ROUTINE_TOKEN }}
+          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+        run: |
+          missing=""
+          for v in TELEGRAM_BOT_TOKEN SERVER_HOST ROUTINE_FIRE_URL ROUTINE_TOKEN DOCKERHUB_USERNAME; do
+            [ -n "${!v}" ] || missing="$missing $v"
+          done
+          if [ -z "$missing" ]; then
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "::warning::Не заданы секреты:$missing — деплой пропущен (см. README)"
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Set image metadata
+        if: steps.secrets.outputs.ready == 'true'
+        run: |
+          echo "TAG=${GITHUB_SHA::7}" >> "$GITHUB_ENV"
+          echo "IMAGE=${{ secrets.DOCKERHUB_USERNAME }}/ai-employee" >> "$GITHUB_ENV"
+
+      - uses: docker/setup-buildx-action@v3
+        if: steps.secrets.outputs.ready == 'true'
+
+      - uses: docker/login-action@v3
+        if: steps.secrets.outputs.ready == 'true'
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - uses: docker/build-push-action@v6
+        if: steps.secrets.outputs.ready == 'true'
+        with:
+          context: .
+          push: true
+          tags: |
+            ${{ env.IMAGE }}:${{ env.TAG }}
+            ${{ env.IMAGE }}:latest
+          cache-from: type=gha,scope=bot
+          cache-to: type=gha,mode=max,scope=bot
+
+      - name: Ensure deploy directory
+        if: steps.secrets.outputs.ready == 'true'
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          username: ${{ secrets.SERVER_USER }}
+          key: ${{ secrets.SERVER_SSH_KEY }}
+          port: ${{ env.SSH_PORT || 22 }}
+          script: mkdir -p "${{ env.BOT_DIR }}"
+
+      - name: Copy compose to server
+        if: steps.secrets.outputs.ready == 'true'
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          username: ${{ secrets.SERVER_USER }}
+          key: ${{ secrets.SERVER_SSH_KEY }}
+          port: ${{ env.SSH_PORT || 22 }}
+          source: docker-compose.yml
+          target: ${{ env.BOT_DIR }}
+
+      - name: Write .env and restart
+        if: steps.secrets.outputs.ready == 'true'
+        uses: appleboy/ssh-action@v1.2.0
+        env:
+          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+          DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+          IMAGE_TAG: ${{ env.TAG }}
+          DEPLOY_PATH: ${{ env.BOT_DIR }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          BOT_ALLOWED_USER_IDS: ${{ secrets.BOT_ALLOWED_USER_IDS }}
+          BOT_ALLOWED_CHAT_IDS: ${{ secrets.BOT_ALLOWED_CHAT_IDS }}
+          ROUTINE_FIRE_URL: ${{ secrets.ROUTINE_FIRE_URL }}
+          ROUTINE_TOKEN: ${{ secrets.ROUTINE_TOKEN }}
+          BOT_ABOUT: ${{ vars.BOT_ABOUT }}
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          username: ${{ secrets.SERVER_USER }}
+          key: ${{ secrets.SERVER_SSH_KEY }}
+          port: ${{ env.SSH_PORT || 22 }}
+          envs: DOCKERHUB_USERNAME,DOCKERHUB_TOKEN,IMAGE_TAG,DEPLOY_PATH,TELEGRAM_BOT_TOKEN,BOT_ALLOWED_USER_IDS,BOT_ALLOWED_CHAT_IDS,ROUTINE_FIRE_URL,ROUTINE_TOKEN,BOT_ABOUT
+          script: |
+            set -euo pipefail
+            cd "${DEPLOY_PATH}"
+            umask 077
+            {
+              echo "TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}"
+              echo "BOT_ALLOWED_USER_IDS=${BOT_ALLOWED_USER_IDS}"
+              echo "BOT_ALLOWED_CHAT_IDS=${BOT_ALLOWED_CHAT_IDS}"
+              echo "ROUTINE_FIRE_URL=${ROUTINE_FIRE_URL}"
+              echo "ROUTINE_TOKEN=${ROUTINE_TOKEN}"
+              echo "BOT_ABOUT=${BOT_ABOUT}"
+            } > .env
+            echo "${DOCKERHUB_TOKEN}" | docker login -u "${DOCKERHUB_USERNAME}" --password-stdin
+            export BOT_IMAGE="${DOCKERHUB_USERNAME}/ai-employee:${IMAGE_TAG}"
+            docker compose pull
+            docker compose up -d --remove-orphans
+            sleep 10
+            docker compose ps
+            test "$(docker inspect -f '{{.State.Running}}' ai-employee)" = true
+            docker compose logs --tail 20
