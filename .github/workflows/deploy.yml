@@ -17,8 +17,8 @@ jobs:
     runs-on: ubuntu-latest
     env:
       SSH_PORT: ${{ secrets.SERVER_SSH_PORT }}
-      # Папка на сервере: <SERVER_DEPLOY_PATH>/ai-employee или ~/ai-employee, если секрет не задан.
-      BOT_DIR: ${{ secrets.SERVER_DEPLOY_PATH && format('{0}/ai-employee', secrets.SERVER_DEPLOY_PATH) || 'ai-employee' }}
+      # Папка на сервере: <SERVER_DEPLOY_PATH>/<имя репозитория> или ~/<имя репозитория>, если секрет не задан.
+      BOT_DIR: ${{ secrets.SERVER_DEPLOY_PATH && format('{0}/{1}', secrets.SERVER_DEPLOY_PATH, github.event.repository.name) || github.event.repository.name }}
     steps:
       - uses: actions/checkout@v4
 
@@ -49,7 +49,7 @@ jobs:
         if: steps.secrets.outputs.ready == 'true'
         run: |
           echo "TAG=${GITHUB_SHA::7}" >> "$GITHUB_ENV"
-          echo "IMAGE=${{ secrets.DOCKERHUB_USERNAME }}/ai-employee" >> "$GITHUB_ENV"
+          echo "IMAGE=${{ secrets.DOCKERHUB_USERNAME }}/${{ github.event.repository.name }}" >> "$GITHUB_ENV"
 
       - uses: docker/setup-buildx-action@v3
         if: steps.secrets.outputs.ready == 'true'
@@ -125,10 +125,10 @@ jobs:
               echo "BOT_ABOUT=${BOT_ABOUT}"
             } > .env
             echo "${DOCKERHUB_TOKEN}" | docker login -u "${DOCKERHUB_USERNAME}" --password-stdin
-            export BOT_IMAGE="${DOCKERHUB_USERNAME}/ai-employee:${IMAGE_TAG}"
+            export BOT_IMAGE="${DOCKERHUB_USERNAME}/${{ github.event.repository.name }}:${IMAGE_TAG}"
             docker compose pull
             docker compose up -d --remove-orphans
             sleep 10
             docker compose ps
-            test "$(docker inspect -f '{{.State.Running}}' ai-employee)" = true
+            test -n "$(docker compose ps --status running -q)"
             docker compose logs --tail 20

@@ -62,7 +62,7 @@ GitHub должен быть подключён к claude.ai (Claude GitHub App 
 git clone https://github.com/aStormspirit/ai-employee-telegram.git ai-employee && cd ai-employee
 cp .env.example .env   # заполните TELEGRAM_BOT_TOKEN, ROUTINE_FIRE_URL, ROUTINE_TOKEN
 docker compose up -d --build
-docker logs -f ai-employee   # «Бот @… запущен»
+docker compose logs -f   # «Бот @… запущен»
 ```
 
 **Вариант Б — автодеплой из GitHub Actions** (сделайте форк или «Use this template»). Settings → Secrets and variables → Actions:
@@ -74,7 +74,7 @@ docker logs -f ai-employee   # «Бот @… запущен»
 | Secret | `BOT_ALLOWED_CHAT_IDS` | номера рабочих чатов через запятую |
 | Secret | `BOT_ALLOWED_USER_IDS` | необязательно: кому можно писать боту в личку |
 | Secret | `SERVER_HOST`, `SERVER_USER`, `SERVER_SSH_KEY` | SSH-доступ к серверу с Docker |
-| Secret | `SERVER_SSH_PORT`, `SERVER_DEPLOY_PATH` | необязательно (22 и `~/ai-employee`) |
+| Secret | `SERVER_SSH_PORT`, `SERVER_DEPLOY_PATH` | необязательно (22 и `~/<имя репозитория>`) |
 | Secret | `DOCKERHUB_USERNAME`, `DOCKERHUB_TOKEN` | куда класть образ |
 | Variable | `BOT_ABOUT` | необязательно: фраза для приветствия |
 
@@ -93,6 +93,10 @@ Push в `main` или Actions → **Deploy bot** → Run workflow. Пока че
 После изменения промпта вставьте его заново в облачную задачу — сама она не обновляется. Правила конкретного проекта удобно держать в его `AGENTS.md` / `CLAUDE.md`: сессия читает их перед работой.
 
 Публикация проектов — их собственные GitHub Actions (Cloudflare Pages, Vercel, Docker на сервере и т. п.): сотрудник пушит в `main` и ждёт workflow.
+
+## Несколько сотрудников
+
+Каждый сотрудник — отдельный Telegram-бот со своей облачной задачей, проектами и чатом. Чтобы завести ещё одного, создайте из шаблона новый репозиторий (например, `shop-employee`) и пройдите установку заново с новым ботом и новой облачной задачей. Боты работают на одном сервере независимо: папка, образ и контейнер называются по имени репозитория. Задачи одного проекта из чужого чата выполнить нельзя — у каждого бота свои `BOT_ALLOWED_CHAT_IDS` и своя облачная задача.
 
 ## Безопасность
 

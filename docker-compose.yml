@@ -3,7 +3,6 @@ services:
     # Локально: docker compose up -d --build. В CI образ берётся из Docker Hub (BOT_IMAGE).
     image: ${BOT_IMAGE:-ai-employee:local}
     build: .
-    container_name: ai-employee
     restart: unless-stopped
     env_file: .env
     mem_limit: 128m
