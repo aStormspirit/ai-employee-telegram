@@ -3,10 +3,10 @@
   "private": true,
   "version": "0.1.0",
   "type": "module",
-  "description": "Нейросотрудник в Telegram: принимает задачи в чате и выполняет их в облачной сессии Claude Code",
+  "description": "Нейросотрудники в Telegram: один сервер, много ботов; задачи выполняются в облачных сессиях Claude Code",
   "scripts": {
     "start": "node src/index.mjs",
-    "check": "node --check src/index.mjs && node --check src/config.mjs && node --check src/telegram.mjs && node --check src/routine.mjs"
+    "check": "for f in src/*.mjs; do node --check \"$f\" || exit 1; done"
   },
   "engines": {
     "node": ">=22"

@@ -1,13 +1,11 @@
 // Запуск облачной сессии Claude Code через API-триггер облачной задачи (routine).
 // Работа идёт на подписке владельца в облаке Anthropic, сервер только передаёт задачу.
-import { config } from './config.mjs';
-
 /**
  * Создаёт новую облачную сессию. `fields` превращаются в текст вида «KEY: value»,
  * который разбирает промпт облачной задачи (ROUTINE_PROMPT.md).
  * Возвращает ссылку на сессию.
  */
-export async function fireRoutine(fields) {
+export async function fireRoutine(employee, fields, log = console) {
   const text = Object.entries(fields)
     .filter(([, v]) => v !== undefined && v !== null && v !== '')
     .map(([k, v]) => (String(v).includes('\n') ? `${k}:\n<<<\n${v}\n>>>` : `${k}: ${v}`))
@@ -20,10 +18,10 @@ export async function fireRoutine(fields) {
     let res;
     let data = {};
     try {
-      res = await fetch(config.routineFireUrl, {
+      res = await fetch(employee.routineFireUrl, {
         method: 'POST',
         headers: {
-          authorization: `Bearer ${config.routineToken}`,
+          authorization: `Bearer ${employee.routineToken}`,
           'anthropic-version': '2023-06-01',
           'content-type': 'application/json',
         },
@@ -38,7 +36,7 @@ export async function fireRoutine(fields) {
     const status = res?.status ?? 0;
     const why = `HTTP ${status || 'network'}: ${data?.error?.message || ''}`.trim();
     const retryable = !res || status >= 500 || status === 429;
-    console.warn(`routine fire failed (attempt ${attempt + 1}): ${why}`);
+    log.warn(`routine fire failed (attempt ${attempt + 1}): ${why}`);
     if (!retryable || attempt >= delays.length) throw new Error(why);
     const retryAfter = Number(res?.headers.get('retry-after')) * 1000;
     await new Promise((r) => setTimeout(r, Math.max(delays[attempt], retryAfter || 0)));

@@ -1,0 +1,24 @@
+# Сотрудники: один Telegram-бот = одна облачная задача Claude Code = свои чаты.
+# Чаты разных сотрудников не должны пересекаться. После изменения файла или секретов —
+# перезапустить деплой (Actions → Run workflow): секреты попадают на сервер только при деплое.
+#
+# Поля:
+#   about   — фраза после «Привет!» в справке: чем занимается сотрудник;
+#   chats   — номера чатов, где любой участник может давать задачи (/id@бот покажет номер);
+#   routine — Fire URL облачной задачи (claude.ai/code/routines → задача → API)
+#             или routine_url_secret: имя секрета с этим адресом;
+#   users   — необязательно: Telegram id тех, кто может писать боту в личку.
+# Токены — в секретах GitHub: <ИМЯ>_TELEGRAM_TOKEN и <ИМЯ>_ROUTINE_TOKEN
+# (для «shop» — SHOP_TELEGRAM_TOKEN и SHOP_ROUTINE_TOKEN) — отдельными секретами
+# или строками KEY=VALUE в одном секрете ENV_FILE. Другие имена секретов —
+# полями telegram_token_secret и routine_token_secret.
+
+shop:
+  about: Я помогаю команде с интернет-магазином — могу что-то поменять или добавить.
+  chats: [-1001234567890]
+  routine_url_secret: SHOP_ROUTINE_URL
+
+# blog:
+#   about: Я помогаю команде с блогом.
+#   chats: [-1009876543210]
+#   routine_url_secret: BLOG_ROUTINE_URL

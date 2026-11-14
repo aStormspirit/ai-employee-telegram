@@ -9,7 +9,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: bot-deploy
+  group: ai-employee-deploy
   cancel-in-progress: false
 
 jobs:
@@ -17,7 +17,7 @@ jobs:
     runs-on: ubuntu-latest
     env:
       SSH_PORT: ${{ secrets.SERVER_SSH_PORT }}
-      # Папка на сервере: <SERVER_DEPLOY_PATH>/<имя репозитория> или ~/<имя репозитория>, если секрет не задан.
+      # Папка на сервере: <SERVER_DEPLOY_PATH>/<имя репозитория> или ~/<имя репозитория>.
       BOT_DIR: ${{ secrets.SERVER_DEPLOY_PATH && format('{0}/{1}', secrets.SERVER_DEPLOY_PATH, github.event.repository.name) || github.event.repository.name }}
     steps:
       - uses: actions/checkout@v4
@@ -25,25 +25,28 @@ jobs:
       - name: Syntax check
         run: npm run check
 
-      - name: Check secrets
+      - name: Build employees from employees.yml
         id: secrets
         env:
-          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          ALL_SECRETS: ${{ toJSON(secrets) }}
           SERVER_HOST: ${{ secrets.SERVER_HOST }}
-          ROUTINE_FIRE_URL: ${{ secrets.ROUTINE_FIRE_URL }}
-          ROUTINE_TOKEN: ${{ secrets.ROUTINE_TOKEN }}
           DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
         run: |
-          missing=""
-          for v in TELEGRAM_BOT_TOKEN SERVER_HOST ROUTINE_FIRE_URL ROUTINE_TOKEN DOCKERHUB_USERNAME; do
-            [ -n "${!v}" ] || missing="$missing $v"
+          python3 -c 'import yaml' 2>/dev/null || pip install -q pyyaml
+          ready=true
+          for v in SERVER_HOST DOCKERHUB_USERNAME; do
+            [ -n "${!v}" ] || { echo "::warning::Не задан секрет $v — деплой пропущен"; ready=false; }
           done
-          if [ -z "$missing" ]; then
-            echo "ready=true" >> "$GITHUB_OUTPUT"
+          if out=$(python3 scripts/employees.py employees.yml); then
+            # Сначала маски (команды ::add-mask::), потом JSON — последней строкой.
+            grep '^::add-mask::' <<<"$out" || true
+            json=$(tail -n 1 <<<"$out")
+            echo "BOT_EMPLOYEES=$json" >> "$GITHUB_ENV"
           else
-            echo "::warning::Не заданы секреты:$missing — деплой пропущен (см. README)"
-            echo "ready=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::Ни один сотрудник не настроен (employees.yml + секреты) — деплой пропущен"
+            ready=false
           fi
+          echo "ready=$ready" >> "$GITHUB_OUTPUT"
 
       - name: Set image metadata
         if: steps.secrets.outputs.ready == 'true'
@@ -100,32 +103,27 @@ jobs:
           DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
           IMAGE_TAG: ${{ env.TAG }}
           DEPLOY_PATH: ${{ env.BOT_DIR }}
-          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-          BOT_ALLOWED_USER_IDS: ${{ secrets.BOT_ALLOWED_USER_IDS }}
-          BOT_ALLOWED_CHAT_IDS: ${{ secrets.BOT_ALLOWED_CHAT_IDS }}
-          ROUTINE_FIRE_URL: ${{ secrets.ROUTINE_FIRE_URL }}
-          ROUTINE_TOKEN: ${{ secrets.ROUTINE_TOKEN }}
-          BOT_ABOUT: ${{ vars.BOT_ABOUT }}
+          BOT_EMPLOYEES: ${{ env.BOT_EMPLOYEES }}
         with:
           host: ${{ secrets.SERVER_HOST }}
           username: ${{ secrets.SERVER_USER }}
           key: ${{ secrets.SERVER_SSH_KEY }}
           port: ${{ env.SSH_PORT || 22 }}
-          envs: DOCKERHUB_USERNAME,DOCKERHUB_TOKEN,IMAGE_TAG,DEPLOY_PATH,TELEGRAM_BOT_TOKEN,BOT_ALLOWED_USER_IDS,BOT_ALLOWED_CHAT_IDS,ROUTINE_FIRE_URL,ROUTINE_TOKEN,BOT_ABOUT
+          envs: DOCKERHUB_USERNAME,DOCKERHUB_TOKEN,IMAGE_TAG,DEPLOY_PATH,BOT_EMPLOYEES
           script: |
             set -euo pipefail
             cd "${DEPLOY_PATH}"
             umask 077
             {
-              echo "TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}"
-              echo "BOT_ALLOWED_USER_IDS=${BOT_ALLOWED_USER_IDS}"
-              echo "BOT_ALLOWED_CHAT_IDS=${BOT_ALLOWED_CHAT_IDS}"
-              echo "ROUTINE_FIRE_URL=${ROUTINE_FIRE_URL}"
-              echo "ROUTINE_TOKEN=${ROUTINE_TOKEN}"
-              echo "BOT_ABOUT=${BOT_ABOUT}"
+              # Сотрудники из employees.yml + секретов — JSON одной строкой (compose не подставляет $ внутри кавычек).
+              printf "BOT_EMPLOYEES='%s'\n" "$(printf '%s' "${BOT_EMPLOYEES:-}" | tr -d '\n\r')"
             } > .env
             echo "${DOCKERHUB_TOKEN}" | docker login -u "${DOCKERHUB_USERNAME}" --password-stdin
             NAME="${{ github.event.repository.name }}"; export BOT_IMAGE="${DOCKERHUB_USERNAME}/${NAME,,}:${IMAGE_TAG}"
+            # Ошибки прежнего контейнера (до перезапуска) — для разбора сбоев. Токены в лог не пишутся.
+            echo "--- ошибки до перезапуска ---"
+            docker compose logs --no-color --tail 300 2>/dev/null | grep -E "fire failed|остановлен|poll error|не запущен" | tail -n 15 || true
+            echo "---"
             docker compose pull
             docker compose up -d --remove-orphans
             sleep 10
