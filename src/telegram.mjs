@@ -43,6 +43,14 @@ export function createTelegram(token, log = console) {
     return last;
   }
 
+  /** Скачивает файл Telegram (до 20 МБ) по file_id. */
+  async function download(fileId) {
+    const f = await tg('getFile', { file_id: fileId });
+    const res = await fetch(`https://api.telegram.org/file/bot${token}/${f.file_path}`);
+    if (!res.ok) throw new Error(`Telegram file: HTTP ${res.status}`);
+    return { data: Buffer.from(await res.arrayBuffer()), path: f.file_path };
+  }
+
   async function dropButtons(chatId, messageId) {
     await tg('editMessageReplyMarkup', { chat_id: chatId, message_id: messageId }).catch(() => {});
   }
@@ -68,5 +76,5 @@ export function createTelegram(token, log = console) {
     }
   }
 
-  return { tg, send, dropButtons, poll };
+  return { tg, send, dropButtons, poll, download };
 }

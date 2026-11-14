@@ -7,7 +7,8 @@
 #   chats   — номера чатов, где любой участник может давать задачи (/id@бот покажет номер);
 #   routine — Fire URL облачной задачи (claude.ai/code/routines → задача → API)
 #             или routine_url_secret: имя секрета с этим адресом;
-#   users   — необязательно: Telegram id тех, кто может писать боту в личку.
+#   users   — необязательно: Telegram id тех, кто может писать боту в личку;
+#   names   — необязательно: имена, на которые бот откликается без @ («Макс, …», «…, Макс?»).
 # Токены — в секретах GitHub: <ИМЯ>_TELEGRAM_TOKEN и <ИМЯ>_ROUTINE_TOKEN
 # (для «shop» — SHOP_TELEGRAM_TOKEN и SHOP_ROUTINE_TOKEN) — отдельными секретами
 # или строками KEY=VALUE в одном секрете ENV_FILE. Другие имена секретов —
@@ -16,6 +17,7 @@
 shop:
   about: Я помогаю команде с интернет-магазином — могу что-то поменять или добавить.
   chats: [-1001234567890]
+  names: [Макс]
   routine_url_secret: SHOP_ROUTINE_URL
 
 # blog:

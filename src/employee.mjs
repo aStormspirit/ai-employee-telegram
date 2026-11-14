@@ -3,6 +3,7 @@
 // сотрудники не пересекаются: из чата одного проекта нельзя запустить работу над другим.
 import { createTelegram } from './telegram.mjs';
 import { fireRoutine } from './routine.mjs';
+import { sttEnabled, transcribe } from './stt.mjs';
 
 /** Картинки сообщения: фото (самый большой размер) и изображения, отправленные файлом. */
 function imagesOf(msg) {
@@ -14,6 +15,28 @@ function imagesOf(msg) {
 }
 
 const MAX_IMAGES = 10;
+
+// Контекст чата: последние сообщения хранятся только в памяти и только для своих чатов.
+const HISTORY_KEEP = 50; // сообщений на чат
+const HISTORY_SEND = 20; // сколько передавать в задачу
+const HISTORY_CHARS = 3000;
+const HISTORY_MAX_AGE = 12 * 3600; // секунд
+const MAX_VOICE_SECONDS = 300;
+
+const escapeRe = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+function authorOf(msg) {
+  const u = msg.from || {};
+  return [u.first_name, u.last_name].filter(Boolean).join(' ') || u.username || 'участник';
+}
+
+/** Короткое текстовое представление сообщения для истории. */
+function describe(msg, voiceText) {
+  if (voiceText) return `🎤 ${voiceText}`;
+  const text = msg.text || msg.caption || '';
+  const kind = msg.photo ? '[фото] ' : msg.document ? '[файл] ' : msg.sticker ? '[стикер] ' : msg.voice ? '[голосовое] ' : msg.video ? '[видео] ' : '';
+  return (kind + text).trim();
+}
 
 // Короткий номер задачи (5 цифр), без повторов подряд.
 let lastId = 0;
@@ -34,7 +57,7 @@ export async function runEmployee(emp) {
     warn: (...a) => console.warn(`[${emp.name}]`, ...a),
     error: (...a) => console.error(`[${emp.name}]`, ...a),
   };
-  const { tg, send, dropButtons, poll } = createTelegram(emp.telegramToken, log);
+  const { tg, send, dropButtons, poll, download } = createTelegram(emp.telegramToken, log);
 
   const me = await tg('getMe');
   // Long polling не работает, пока у бота задан вебхук.
@@ -88,6 +111,35 @@ export async function runEmployee(emp) {
     }, 1500);
   }
 
+  // Обращение по имени: «Имя, …» / «Имя …» в начале или «…, Имя?» в конце сообщения.
+  const namesRe = emp.names.length ? emp.names.map(escapeRe).join('|') : null;
+  const nameStart = namesRe ? new RegExp(`^\\s*(?:эй\\s*,?\\s*)?(?:${namesRe})(?=$|[\\s,.!?:;])[\\s,.!?:;]*`, 'i') : null;
+  const nameEnd = namesRe ? new RegExp(`[\\s,]+(?:${namesRe})[\\s.!?]*$`, 'i') : null;
+  const calledByName = (t) => Boolean(t && ((nameStart && nameStart.test(t)) || (nameEnd && nameEnd.test(t))));
+  const stripName = (t) => (nameStart ? t.replace(nameStart, '') : t).replace(nameEnd || /$^/, '').trim();
+
+  const history = new Map(); // chatId → [{ id, t, who, text }]
+  function remember(msg, voiceText) {
+    const text = describe(msg, voiceText);
+    if (!text) return;
+    const list = history.get(msg.chat.id) || [];
+    list.push({ id: msg.message_id, t: msg.date, who: authorOf(msg), text: text.slice(0, 500) });
+    if (list.length > HISTORY_KEEP) list.splice(0, list.length - HISTORY_KEEP);
+    history.set(msg.chat.id, list);
+  }
+  function historyFor(chatId, excludeId) {
+    const now = Date.now() / 1000;
+    const items = (history.get(chatId) || []).filter((m) => m.id !== excludeId && now - m.t < HISTORY_MAX_AGE).slice(-HISTORY_SEND);
+    const lines = items.map((m) => {
+      const d = new Date(m.t * 1000);
+      const hh = String(d.getUTCHours()).padStart(2, '0');
+      const mm = String(d.getUTCMinutes()).padStart(2, '0');
+      return `${hh}:${mm} UTC ${m.who}: ${m.text}`;
+    });
+    while (lines.join('\n').length > HISTORY_CHARS) lines.shift();
+    return lines.join('\n');
+  }
+
   async function start(chatId, replyTo, note, fields) {
     const status = await send(chatId, note, { replyTo });
     try {
@@ -130,7 +182,23 @@ export async function runEmployee(emp) {
   async function onMessage(msg, albumImages) {
     if (!msg?.from) return;
     if (msg.media_group_id && !albumImages) return collectAlbum(msg);
-    const text = msg.text || msg.caption || '';
+    const allowed = canUse(msg.chat, msg.from.id);
+
+    // Голосовые в своих чатах расшифровываем (если настроен STT): так бот слышит своё имя и помнит сказанное.
+    let voiceText = '';
+    const voice = msg.voice || msg.audio || msg.video_note;
+    if (voice && allowed && sttEnabled && (voice.duration || 0) <= MAX_VOICE_SECONDS) {
+      try {
+        const { data, path } = await download(voice.file_id);
+        voiceText = await transcribe(data, path.split('/').pop() || 'voice.ogg');
+        log.log(`voice chat=${msg.chat.id} ${voice.duration || '?'}s → ${voiceText.length} симв.`);
+      } catch (e) {
+        log.warn(`voice: ${e.message}`);
+      }
+    }
+    if (allowed) remember(msg, voiceText);
+
+    const text = voiceText || msg.text || msg.caption || '';
     const entities = msg.entities || msg.caption_entities || [];
     const isPrivate = msg.chat.type === 'private';
     const mentioned = entities.some(
@@ -142,15 +210,16 @@ export async function runEmployee(emp) {
         (e.type === 'bot_command' && e.offset === 0 && /^\/task(@|$)/i.test(text.slice(0, e.length))),
     );
     const replyToBot = msg.reply_to_message?.from?.id === me.id;
-    if (!isPrivate && !mentioned && !replyToBot) return;
+    const byName = calledByName(text);
+    if (!isPrivate && !mentioned && !replyToBot && !byName) return;
     log.log(`msg chat=${msg.chat.id} type=${msg.chat.type}`);
 
-    const clean = text.replace(new RegExp(`@${username}`, 'gi'), '').trim();
+    const clean = stripName(text.replace(new RegExp(`@${username}`, 'gi'), '').trim());
     const cmd = clean.split(/\s+/)[0].toLowerCase();
     // /id отвечает везде — чтобы узнать номер чата до подключения.
     if (cmd === '/id') return send(msg.chat.id, `chat_id: ${msg.chat.id}\nuser_id: ${msg.from.id}`, { replyTo: msg.message_id });
 
-    if (!canUse(msg.chat, msg.from.id)) {
+    if (!allowed) {
       log.log(`ignored: chat ${msg.chat.id} не закреплён за этим сотрудником`);
       return send(
         msg.chat.id,
@@ -191,6 +260,8 @@ export async function runEmployee(emp) {
         PREVIOUS_PLAN: planInfo.plan,
         FEEDBACK: clean,
         IMAGES: all.join(','),
+        VOICE: voiceText ? 'yes' : '',
+        HISTORY: historyFor(msg.chat.id, msg.message_id),
       });
     }
 
@@ -210,6 +281,8 @@ export async function runEmployee(emp) {
       TASK: clean.replace(NO_DEPLOY_TAG, '').replace(/\s+/g, ' ').trim() || 'посмотри картинку',
       CONTEXT: replyText,
       IMAGES: images.join(','),
+      VOICE: voiceText ? 'yes' : '',
+      HISTORY: historyFor(msg.chat.id, msg.message_id),
     });
   }
 

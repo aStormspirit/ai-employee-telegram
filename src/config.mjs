@@ -24,6 +24,7 @@ function fromEnv() {
       userIds: list(process.env.BOT_ALLOWED_USER_IDS),
       routineFireUrl: process.env.ROUTINE_FIRE_URL,
       routineToken: process.env.ROUTINE_TOKEN,
+      names: (process.env.BOT_NAMES || '').split(',').map((n) => n.trim()).filter(Boolean),
       about: process.env.BOT_ABOUT,
     },
   ];
@@ -55,6 +56,7 @@ function load() {
       routineFireUrl: e.routineFireUrl,
       routineToken: e.routineToken,
       about: e.about || DEFAULT_ABOUT,
+      names: (Array.isArray(e.names) ? e.names : String(e.names || '').split(',')).map((n) => String(n).trim()).filter(Boolean),
     };
     const missing = ['telegramToken', 'routineFireUrl', 'routineToken'].filter((k) => !emp[k]);
     if (missing.length) {
@@ -80,3 +82,14 @@ function load() {
 }
 
 export const employees = load();
+
+// Распознавание голосовых: любой OpenAI-совместимый /audio/transcriptions (OpenAI, Groq и др.).
+// Без STT_API_URL и STT_API_KEY голосовые не расшифровываются.
+export const stt = process.env.STT_API_URL && process.env.STT_API_KEY
+  ? {
+      url: process.env.STT_API_URL,
+      key: process.env.STT_API_KEY,
+      model: process.env.STT_MODEL || 'whisper-1',
+      language: process.env.STT_LANGUAGE || 'ru',
+    }
+  : null;

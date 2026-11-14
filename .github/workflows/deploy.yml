@@ -104,12 +104,16 @@ jobs:
           IMAGE_TAG: ${{ env.TAG }}
           DEPLOY_PATH: ${{ env.BOT_DIR }}
           BOT_EMPLOYEES: ${{ env.BOT_EMPLOYEES }}
+          STT_API_URL: ${{ env.STT_API_URL }}
+          STT_API_KEY: ${{ env.STT_API_KEY }}
+          STT_MODEL: ${{ env.STT_MODEL }}
+          STT_LANGUAGE: ${{ env.STT_LANGUAGE }}
         with:
           host: ${{ secrets.SERVER_HOST }}
           username: ${{ secrets.SERVER_USER }}
           key: ${{ secrets.SERVER_SSH_KEY }}
           port: ${{ env.SSH_PORT || 22 }}
-          envs: DOCKERHUB_USERNAME,DOCKERHUB_TOKEN,IMAGE_TAG,DEPLOY_PATH,BOT_EMPLOYEES
+          envs: DOCKERHUB_USERNAME,DOCKERHUB_TOKEN,IMAGE_TAG,DEPLOY_PATH,BOT_EMPLOYEES,STT_API_URL,STT_API_KEY,STT_MODEL,STT_LANGUAGE
           script: |
             set -euo pipefail
             cd "${DEPLOY_PATH}"
@@ -117,6 +121,11 @@ jobs:
             {
               # Сотрудники из employees.yml + секретов — JSON одной строкой (compose не подставляет $ внутри кавычек).
               printf "BOT_EMPLOYEES='%s'\n" "$(printf '%s' "${BOT_EMPLOYEES:-}" | tr -d '\n\r')"
+              # Расшифровка голосовых (необязательно).
+              echo "STT_API_URL=${STT_API_URL:-}"
+              echo "STT_API_KEY=${STT_API_KEY:-}"
+              echo "STT_MODEL=${STT_MODEL:-}"
+              echo "STT_LANGUAGE=${STT_LANGUAGE:-}"
             } > .env
             echo "${DOCKERHUB_TOKEN}" | docker login -u "${DOCKERHUB_USERNAME}" --password-stdin
             NAME="${{ github.event.repository.name }}"; export BOT_IMAGE="${DOCKERHUB_USERNAME}/${NAME,,}:${IMAGE_TAG}"
