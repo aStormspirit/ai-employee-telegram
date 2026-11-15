@@ -91,6 +91,14 @@ export async function runEmployee(emp) {
     taskImages.set(id, images);
     if (taskImages.size > 500) taskImages.delete(taskImages.keys().next().value);
   };
+  // Полный текст задачи и контекст — чтобы сессия после «Делать» видела исходные данные (таблицы, ссылки),
+  // а не только короткое название из шапки плана. После перезапуска — берём из сообщения, на которое ответил план.
+  const taskData = new Map();
+  const rememberTask = (id, data) => {
+    taskData.set(id, { ...(taskData.get(id) || {}), ...data });
+    if (taskData.size > 500) taskData.delete(taskData.keys().next().value);
+  };
+  const textOf = (m) => stripName(String(m?.text || m?.caption || '').replace(new RegExp(`@${username}`, 'gi'), '').trim());
 
   // Альбом приходит отдельными сообщениями с общим media_group_id; подпись — только у одного.
   const albums = new Map();
@@ -167,6 +175,7 @@ export async function runEmployee(emp) {
     if (action !== 'ok') return send(chatId, 'Хорошо, задачу отменил.', { replyTo: msgId });
     // План — ответ на сообщение с задачей (или с правками): картинки берём оттуда и из памяти.
     const images = uniq([...(taskImages.get(info.id) || []), ...imagesOf(q.message.reply_to_message)]);
+    const data = taskData.get(info.id) || {};
     return start(chatId, msgId, 'Отлично, приступаю! Напишу, когда закончу.', {
       IMAGES: images.join(','),
       MODE: 'work',
@@ -175,7 +184,11 @@ export async function runEmployee(emp) {
       REPLY_TO: msgId,
       NO_DEPLOY: info.noDeploy ? 'yes' : '',
       TASK: info.task,
+      ORIGINAL_TASK: data.task || textOf(q.message.reply_to_message),
+      FEEDBACK: (data.feedback || []).join('\n'),
+      CONTEXT: data.context || '',
       APPROVED_PLAN: info.plan,
+      HISTORY: historyFor(chatId),
     });
   }
 
@@ -250,6 +263,7 @@ export async function runEmployee(emp) {
     if (planInfo) {
       const all = uniq([...(taskImages.get(planInfo.id) || []), ...images]);
       rememberImages(planInfo.id, all);
+      rememberTask(planInfo.id, { feedback: [...(taskData.get(planInfo.id)?.feedback || []), clean] });
       return start(msg.chat.id, msg.message_id, 'Понял, учту и пришлю обновлённый план.', {
         MODE: 'plan',
         TASK_ID: planInfo.id,
@@ -259,6 +273,7 @@ export async function runEmployee(emp) {
         TASK: planInfo.task,
         PREVIOUS_PLAN: planInfo.plan,
         FEEDBACK: clean,
+        ORIGINAL_TASK: taskData.get(planInfo.id)?.task || '',
         IMAGES: all.join(','),
         VOICE: voiceText ? 'yes' : '',
         HISTORY: historyFor(msg.chat.id, msg.message_id),
@@ -267,6 +282,7 @@ export async function runEmployee(emp) {
 
     const id = nextTaskId();
     rememberImages(id, images);
+    rememberTask(id, { task: clean, context: replyText });
     const noDeploy = new RegExp(NO_DEPLOY_TAG.source, 'i').test(clean);
     // Задача (/task, «выполни/сделай/поставь задачу») — обещаем план; иначе это вопрос — обещаем ответ.
     const isTask = /^\/task\b|^(выполни|сделай|поставь)\s+задач/i.test(clean.replace(/^\/task@\S+/i, '/task'));
@@ -278,7 +294,7 @@ export async function runEmployee(emp) {
       CHAT_ID: msg.chat.id,
       REPLY_TO: msg.message_id,
       NO_DEPLOY: noDeploy ? 'yes' : '',
-      TASK: clean.replace(NO_DEPLOY_TAG, '').replace(/\s+/g, ' ').trim() || 'посмотри картинку',
+      TASK: clean.replace(NO_DEPLOY_TAG, '').trim() || 'посмотри картинку',
       CONTEXT: replyText,
       IMAGES: images.join(','),
       VOICE: voiceText ? 'yes' : '',
